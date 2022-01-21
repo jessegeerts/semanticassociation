@@ -2,13 +2,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 n_trials = 2
-alpha_tr = 0.07
+alpha_thresh = 0.0001
 c = -1
-k = 0.4 #(0.0 - 0.9)
-t_t = 0.5
-r_tr = 1
-d = 0.4 #(0.0-0.9)
-sd = 0.4 # (0.0 - 0.8)
+kappa = 0.9  #(0.0 - 0.9)  # recurrent inhibition strength
+lambda_param = 0.9  #(0.0-0.9)  # lateral inhibition strength
+tau = 0.5  # time constant of accumulator
+recall_threshold = 1
+noise_std = 0.1  # (0.0 - 0.8)
+learning_rate = .2  # learning rate for SR
 
 
 class Agent(object):
@@ -31,11 +32,16 @@ class Agent(object):
         self.rec = np.zeros((n_trials, self.n))
 
     def update(self, state, next_state):
-        self.trace = self.gamma * self.decay * self.trace + np.eye(self.n)[state]
-        # Vector addiction of trace vector and state vector 0,0,...1...0,0
+        self.update_trace(state)
+        self.update_sr(next_state, state)
 
+    def update_sr(self, next_state, state):
         error = np.eye(self.n)[next_state] + self.gamma * self.M[next_state] - self.M[state]
         self.M += self.lr * np.outer(self.trace, error)  # takes two vectors to produce a NxM matrix
+
+    def update_trace(self, state):
+        # Vector addiction of trace vector and state vector 0,0,...1...0,0
+        self.trace = self.gamma * self.decay * self.trace + np.eye(self.n)[state]
 
     def reset_trace(self):
         self.trace = np.zeros(self.n)
@@ -46,7 +52,50 @@ class Agent(object):
     def reset_x(self):
         self.x = np.zeros(self.n)
 
+    def do_free_recall(self, recall_length):
+        """Function to output list of recalled words.
+        """
+        recalled_word_sequence = []
+        accumulator_values = []
 
+        for w in recall_length:
+
+            ctx_vec = ag.trace  # contex vector  # TODO: figure out whether context vector should be set to zero
+            f_strength = np.matmul(ctx_vec, ag.M)
+            ag.all_retr[trial, :] = f_strength
+            filtered = [x for x in f_strength if x > alpha_thresh]
+            Cv = np.std(filtered) / np.mean(filtered)
+
+            while True:
+                self.update_accumulator(Cv, f_strength)
+                accumulator_values.append(ag.x)
+                if np.any(ag.x > recall_threshold):
+                    crossed_thresh_idx = np.argwhere(ag.x > recall_threshold)
+                    recalled_word = np.random.choice(crossed_thresh_idx[0])
+                    if recalled_word not in recalled_word_sequence:
+                        recalled_word_sequence.append(recalled_word)
+                    ag.x[recalled_word] = 0  # TODO: if recalled word was recalled before, reset to zero but don't recall
+                    break
+            ag.update_trace(recalled_word)
+        return recalled_word_sequence, np.array(accumulator_values)
+
+    def update_accumulator(self, coef_var, input_vector):
+        """Update the accumulator of Sederberg et al.
+
+        According to (Usher & McClelland, 2001, from Sederberg et al. 2008):
+        xs(ag.x) = (1-tk-tdL)x_s0 + t*Cv*f_strength + e ; xs = max(xs,0)
+
+        
+        :param coef_var: coefficient of variation 
+        :param input_vector:
+        :return:
+        """
+        noise = np.random.normal(0, noise_std, len(word_list))
+        scaled_input = tau * coef_var * input_vector
+        updated_state_vector = np.matmul(1 - tau * kappa - lambda_param * tau * L, ag.x)
+
+        ag.x = updated_state_vector + scaled_input + noise
+        ag.x = np.maximum(ag.x, 0)
 
 
 if __name__ == '__main__':
@@ -68,13 +117,12 @@ if __name__ == '__main__':
     # translate to state indices:
     state_sequence = [word_index[word] for word in word_sequence]
     word_order = [word_index[word] for word in word_list]
+    number_of_recalls = range(len(word_index) - 1)
 
     # initialise agent:
-    ag = Agent(len(word_list))
+    ag = Agent(len(word_list), learning_rate=learning_rate)
 
-
-    L = np.zeros((len(word_list), len(word_list)), int) + 1
-    np.fill_diagonal(L, 0)
+    L = np.ones((len(word_list), len(word_list))) - np.eye(len(word_list))
 
     # learn for a given number of trials.
     for trial in range(n_trials):
@@ -88,24 +136,12 @@ if __name__ == '__main__':
 
         ag.SR_Ms[:, :, trial] = ag.M
         # ADD FREE RECALL AFTER EACH TRIAL HERE
-        for w in range(len(word_index)-1):
-            ctx_vec = ag.trace #contex vector
-            f_strength = np.matmul(ctx_vec, ag.M)
-            ag.all_retr[trial,:] = f_strength
-            filtered = [x for x in f_strength if np.abs(x) > alpha_tr]
-            Cv = np.std(filtered)/np.mean(filtered)
-            # function (Usher & McClelland, 2001, from Sederberg et al. 2008): xs(ag.x) = (1-tk-tdL)x_s0 + t*Cv*f_strength + e ; xs = max(xs,0)
+        recalled_words, accum_vals = ag.do_free_recall(number_of_recalls)
 
-            while True:
-                e = np.random.normal(0, sd, len(word_list))
-                ag.x = np.matmul(ag.x, (1 - t_t*k - d*t_t*L)).T + t_t * Cv * f_strength + e
-                ag.x = np.maximum(ag.x, 0)
-                if np.any(ag.x > r_tr):
-                    w_rec = np.argwhere(ag.x > r_tr)
-                    ag.rec[trial, w] = np.amax(w_rec)
-                    ag.x[np.amax(w_rec)] = 0
-                    break
-            ag.trace = ag.gamma * ag.decay * ag.trace + np.eye(ag.n)[word_order[np.amax(w_rec)]]
+        plt.plot(accum_vals)
+        plt.legend(range(ag.n))
+        plt.show()
+        print(recalled_words)
 
 
 print(ag.rec)
