@@ -64,10 +64,10 @@ if __name__ == '__main__':
             idx += 1
 
     # generate some word sequence from the body of text (the word sequence the agent will see)
-    word_sequence: list[str] = ['A', 'B', 'C', 'D', 'A', 'B', 'E', 'F', 'A', 'B', 'G', 'H', 'I', 'A']
+    word_sequence = ['A', 'B', 'C', 'D', 'A', 'B', 'E', 'F', 'A', 'B', 'G', 'H', 'I', 'A']
     # translate to state indices:
     state_sequence = [word_index[word] for word in word_sequence]
-    word_sequence = [word_index[word] for word in word_list]
+    word_order = [word_index[word] for word in word_list]
 
     # initialise agent:
     ag = Agent(len(word_list))
@@ -105,7 +105,7 @@ if __name__ == '__main__':
                     ag.rec[trial, w] = np.amax(w_rec)
                     ag.x[np.amax(w_rec)] = 0
                     break
-            ag.trace = ag.gamma * ag.decay * ag.trace + np.eye(ag.n)[word_sequence[np.amax(w_rec)]]
+            ag.trace = ag.gamma * ag.decay * ag.trace + np.eye(ag.n)[word_order[np.amax(w_rec)]]
 
 
 print(ag.rec)
