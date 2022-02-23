@@ -1,11 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-n_trials = 2
+n_trials = 1
 alpha_thresh = 0.0001
 c = -1
-kappa = 0.9  #(0.0 - 0.9)  # recurrent inhibition strength
-lambda_param = 0.9  #(0.0-0.9)  # lateral inhibition strength
+kappa = 0.75  #(0.0 - 0.9)  # recurrent inhibition strength
+lambda_param = 1.38  #(0.0-0.9)  # lateral inhibition strength
 tau = 0.5  # time constant of accumulator
 recall_threshold = 1
 noise_std = 0.1  # (0.0 - 0.8)
@@ -55,10 +55,13 @@ class Agent(object):
     def do_free_recall(self, recall_length):
         """Function to output list of recalled words.
         """
-        recalled_word_sequence = []
+        ag.recalled_word_sequence = []
         accumulator_values = []
+        ag.all_recall = []
+
 
         for w in recall_length:
+            ag.x[ag.recalled_word_sequence] = 0
 
             ctx_vec = ag.trace  # contex vector  # TODO: figure out whether context vector should be set to zero
             f_strength = np.matmul(ctx_vec, ag.M)
@@ -68,16 +71,20 @@ class Agent(object):
 
             while True:
                 self.update_accumulator(Cv, f_strength)
-                accumulator_values.append(ag.x)
+                #accumulator_values.append(ag.x) #moved to line 77
                 if np.any(ag.x > recall_threshold):
                     crossed_thresh_idx = np.argwhere(ag.x > recall_threshold)
                     recalled_word = np.random.choice(crossed_thresh_idx[0])
-                    if recalled_word not in recalled_word_sequence:
-                        recalled_word_sequence.append(recalled_word)
+
+                    ag.all_recall.append(recalled_word)
+
+                    if recalled_word not in ag.recalled_word_sequence:
+                        ag.recalled_word_sequence.append(recalled_word)
+                        accumulator_values.append(ag.x)
                     ag.x[recalled_word] = 0  # TODO: if recalled word was recalled before, reset to zero but don't recall
                     break
             ag.update_trace(recalled_word)
-        return recalled_word_sequence, np.array(accumulator_values)
+        return ag.recalled_word_sequence, np.array(accumulator_values)
 
     def update_accumulator(self, coef_var, input_vector):
         """Update the accumulator of Sederberg et al.
@@ -90,6 +97,8 @@ class Agent(object):
         :param input_vector:
         :return:
         """
+
+        ag.x[ag.recalled_word_sequence] = 0
         noise = np.random.normal(0, noise_std, len(word_list))
         scaled_input = tau * coef_var * input_vector
         updated_state_vector = np.matmul(1 - tau * kappa - lambda_param * tau * L, ag.x)
@@ -138,13 +147,13 @@ if __name__ == '__main__':
         # ADD FREE RECALL AFTER EACH TRIAL HERE
         recalled_words, accum_vals = ag.do_free_recall(number_of_recalls)
 
-        plt.plot(accum_vals)
-        plt.legend(range(ag.n))
-        plt.show()
+        #plt.plot(accum_vals)
+        #plt.legend(range(ag.n))
+        #plt.show()
         print(recalled_words)
 
 
-print(ag.rec)
+#print(ag.rec)
 
 
 
