@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from itertools import product
 
-n_items = 10
+n_items = 3
 tau = .5
 kappa = .5  # self inhibition
 lambda_param = 8.  # lateral inhibition
@@ -49,8 +49,8 @@ if __name__ == '__main__':
     n_rows = 5
     n_cols = 5
 
-    k_min, k_max = (.1, 1.4)
-    l_min, l_max = (.1, 1.8)
+    k_min, k_max = (.42, 1.4)
+    l_min, l_max = (.53, 1.8)
 
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(9, 9), sharex=True, sharey=True)
 
@@ -78,8 +78,8 @@ if __name__ == '__main__':
     plt.show()
 
     # Now check for a requirement that one but only one accumulator reaches threshold
-    k_min, k_max = (.1, 3.)
-    l_min, l_max = (.1, 3.)
+    k_min, k_max = (.1, 4.)
+    l_min, l_max = (.1, 1.5)
 
     n_rows = 40
     n_cols = 40
@@ -92,6 +92,7 @@ if __name__ == '__main__':
     param_grid = np.zeros((n_rows, n_cols, n_z), dtype=bool)
     i = 0
     for k, l, dist in product(kappa_range, lambda_range, distractor_range):
+
         params['kappa'] = k
         params['lambda'] = l
 
@@ -112,5 +113,6 @@ if __name__ == '__main__':
         plt.pcolormesh(xx, yy, param_grid[:, :, i])
         plt.xlabel('Kappa')
         plt.ylabel('Lambda')
+        plt.title('distractor strength {:.2f}'.format(d))
         plt.savefig('good_param_vals{:.2f}.png'.format(d))
         plt.show()

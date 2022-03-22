@@ -1,15 +1,15 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-n_trials = 1
+n_trials = 500
 alpha_thresh = 0.0001
 c = -1
-kappa = 0.75  #(0.0 - 0.9)  # recurrent inhibition strength
-lambda_param = 1.38  #(0.0-0.9)  # lateral inhibition strength
+kappa = 0.67  #(0.0 - 0.9)  # recurrent inhibition strength
+lambda_param = 1.17  #(0.0-0.9)  # lateral inhibition strength
 tau = 0.5  # time constant of accumulator
 recall_threshold = 1
-noise_std = 0.1  # (0.0 - 0.8)
-learning_rate = .2  # learning rate for SR
+noise_std = 0.0003  # (0.0 - 0.8)
+learning_rate = .1  # learning rate for SR
 
 
 class Agent(object):
@@ -59,9 +59,7 @@ class Agent(object):
         accumulator_values = []
         ag.all_recall = []
 
-
         for w in recall_length:
-            ag.x[ag.recalled_word_sequence] = 0
 
             ctx_vec = ag.trace  # contex vector  # TODO: figure out whether context vector should be set to zero
             f_strength = np.matmul(ctx_vec, ag.M)
@@ -71,10 +69,10 @@ class Agent(object):
 
             while True:
                 self.update_accumulator(Cv, f_strength)
-                #accumulator_values.append(ag.x) #moved to line 77
+                accumulator_values.append(ag.x) #moved to line 77
                 if np.any(ag.x > recall_threshold):
                     crossed_thresh_idx = np.argwhere(ag.x > recall_threshold)
-                    recalled_word = np.random.choice(crossed_thresh_idx[0])
+                    recalled_word = np.random.choice(crossed_thresh_idx[:, 0])
 
                     ag.all_recall.append(recalled_word)
 
@@ -85,6 +83,42 @@ class Agent(object):
                     break
             ag.update_trace(recalled_word)
         return ag.recalled_word_sequence, np.array(accumulator_values)
+
+    def do_free_recall_LBA(self, recall_length):
+
+        scale = .2
+        max_intercept = 1.
+        threshold = 1.
+
+        already_recalled = np.zeros(self.n, dtype=bool)
+
+        recall_list = []
+
+        for w in recall_length:
+            ctx_vec = self.trace
+            f_strength = np.matmul(ctx_vec, self.M)
+
+            slope = np.random.normal(f_strength, scale)
+            if np.all(slope[~already_recalled] <= 0):
+                break
+            slope[slope < 0] = 0
+            intercept = np.random.uniform(0, max_intercept, size=len(f_strength))
+
+            time_to_threshold = (threshold - intercept) / slope
+            time_to_threshold[already_recalled] = np.nan
+            recalled_word = np.nanargmin(time_to_threshold)
+
+            self.update_trace(recalled_word)
+            already_recalled[recalled_word] = True
+            recall_list.append(recalled_word)
+
+            unique, counts = np.unique(recall_list, return_counts=True)
+            if np.any(counts>1):
+                print('break')
+
+        return recall_list
+
+
 
     def update_accumulator(self, coef_var, input_vector):
         """Update the accumulator of Sederberg et al.
@@ -126,13 +160,14 @@ if __name__ == '__main__':
     # translate to state indices:
     state_sequence = [word_index[word] for word in word_sequence]
     word_order = [word_index[word] for word in word_list]
-    number_of_recalls = range(len(word_index) - 1)
+    number_of_recalls = range(len(word_index))
 
     # initialise agent:
     ag = Agent(len(word_list), learning_rate=learning_rate)
 
     L = np.ones((len(word_list), len(word_list))) - np.eye(len(word_list))
 
+    all_recalled_words = []
     # learn for a given number of trials.
     for trial in range(n_trials):
         ag.reset_trace()
@@ -145,8 +180,10 @@ if __name__ == '__main__':
 
         ag.SR_Ms[:, :, trial] = ag.M
         # ADD FREE RECALL AFTER EACH TRIAL HERE
-        recalled_words, accum_vals = ag.do_free_recall(number_of_recalls)
-
+        recalled_words = ag.do_free_recall_LBA(number_of_recalls)
+        while len(recalled_words) < ag.n:
+            recalled_words.append(np.nan)
+        all_recalled_words.append(recalled_words)
         #plt.plot(accum_vals)
         #plt.legend(range(ag.n))
         #plt.show()
@@ -155,7 +192,20 @@ if __name__ == '__main__':
 
 #print(ag.rec)
 
+    # check distribution of next words given word 0
+    histogram = np.zeros(ag.n)
+    for i, recall in enumerate(all_recalled_words):
+        position_word0 = np.argwhere(np.array(recall) == 0)[0][0]
+        if position_word0 < 7:
+            next_word = recall[position_word0 + 1]
+            histogram[next_word] += 1
 
+    # check distribution of first recalled words
+    first_words = np.array(all_recalled_words)[:, 0]
+    _, counts = np.unique(first_words, return_counts=True)
+    print(' ')
+
+    # plot probability of recall given lag
 
 
 
