@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.io as spio
+import seaborn as sns
+import pandas as pd
 
 alphas = np.linspace(0, 1, 11)
 n_trials = 500
@@ -21,13 +23,13 @@ groupDist = mat['semDistGroups']
 mat = spio.loadmat('allCosL1.mat', squeeze_me=True)
 allCos = mat['allCos']
 
-
 all_cos_distances = []
 
 for i in range(allCos.shape[0]):
     for j in range(i, allCos.shape[1]):
         all_cos_distances.append(allCos[i, j])
 all_cos_distances = np.sort(all_cos_distances)
+
 
 def softmax(x, beta):
     """Compute the softmax function.
@@ -207,6 +209,7 @@ if __name__ == '__main__':
 
         all_recalled_words = []
         # learn for a given number of trials.
+
         for trial in range(n_trials):
             ag.reset_trace()
             ag.reset_matrix()
@@ -246,17 +249,19 @@ if __name__ == '__main__':
         print(firstCount)
 
         f = plt.figure(1)
-        plt.plot(firstCount/sum(firstCount)*100)
+        plt.plot(firstCount / sum(firstCount) * 100)
         plt.xlabel("Serial Position")
         plt.ylabel("First recall")
-        loc = range(len(firstCount))
-        labels = list(range(len(state_sequence)))
+        # loc = np.array([0, 4, 9, 14, 19, 24, 29, 34, 39, 44, 49, 54, 59])  # range(len(lagCRP))
+        # labels = [-29, -25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25, 29]  # list(range(-(len(state_sequence) - 1), len(state_sequence)))
+        loc = np.array([0, 6, 11, 16, 21, 26, 30])  # range(len(lagCRP))
+        labels = [1, 5, 10, 15, 20, 25, 29]  # list(range(-(len(state_sequence) - 1), len(state_sequence)))
         plt.xticks(loc, labels)  # choose which x locations to have ticks
         plt.title("Alpha =" + str(alpha))
-        #plt.ylim([0.05, 0.15])
+        # plt.ylim([0.05, 0.15])
         f.show()
         title = "firstRecall_alpha" + str(alpha) + ".png"
-        f.savefig(title, dpi=f.dpi)
+        # f.savefig(title, dpi=f.dpi)
         plt.close()
 
         # plot probability of recall
@@ -270,28 +275,49 @@ if __name__ == '__main__':
         plt.plot(allCount / n_trials)
         plt.xlabel("Serial Position")
         plt.ylabel("Recall")
-        loc = range(len(allCount))
-        labels = list(range(len(state_sequence)))
+        # loc = range(len(allCount))
+        # labels = list(range(len(state_sequence)))
+        loc = np.array([0, 6, 11, 16, 21, 26, 30])  # range(len(lagCRP))
+        labels = [1, 5, 10, 15, 20, 25, 29]  # list(range(-(len(state_sequence) - 1), len(state_sequence)))
         plt.xticks(loc, labels)  # choose which x locations to have ticks
         plt.title("Alpha =" + str(alpha))
         plt.ylim([0.8, 1])
         g.show()
         title = "Recall_alpha" + str(alpha) + ".png"
-        #g.savefig(title, dpi=g.dpi)
+        # g.savefig(title, dpi=g.dpi)
         plt.close()
 
         # plot probability of recall given lag
 
         lagCRP = np.zeros((len(state_sequence) - 1) * 2 + 1)
+        lagCRP_trial = np.zeros((n_trials, (len(state_sequence) - 1) * 2 + 1))
+        lagCond_trial = np.zeros((n_trials, (len(state_sequence) - 1) * 2 + 1))
         cosDistGroups = np.zeros((n_trials, 4))
         distCont = np.zeros((n_trials, len(all_cos_distances)))
+        lagCRPProb = np.zeros((n_trials, (len(state_sequence) - 1) * 2+1))
 
         for i, recall in enumerate(all_recalled_words):
             distGr = np.zeros(4)
             dCont = np.zeros(len(all_cos_distances))
+            lagMatrix = np.zeros((ag.n, (len(state_sequence) - 1) * 2))
+            lagM =  np.zeros((ag.n, (len(state_sequence) - 1) * 2+1))
+
+            for r in range(ag.n):
+                lagMatrix[r, len(state_sequence) - 1 - r:len(state_sequence) - r + len(state_sequence) - 2] = np.ones(
+                    (1, len(state_sequence) - 1))
+
+            lagMatrix = np.insert(lagMatrix, len(state_sequence) - 1, [0], axis=1)
+
 
             for w, word in enumerate(recall):
                 idxClue = [i for i, j in enumerate(state_sequence) if j == word]
+
+
+                if len(idxClue) > 0:
+                    lagM[w, :] = lagMatrix[idxClue[0], :]
+                    for lt in range(ag.n):
+                        lagMatrix[lt, idxClue[0] - lt + len(state_sequence) - 1] = 0
+
                 if w < len(word_index) - 2:
                     next_word = recall[w + 1]
                     idxRetr = [i for i, j in enumerate(state_sequence) if j == next_word]
@@ -300,36 +326,61 @@ if __name__ == '__main__':
                         diffLag = [x - y for x in idxRetr for y in idxClue]
                         lag = min(diffLag, key=abs)
                         lagCRP[lag + len(state_sequence) - 1] += 1
+                        lagCRP_trial[i, lag + len(state_sequence) - 1] += 1
                         dGroup = groupDist[idxRetr, idxClue]
                         distGr[dGroup - 1] += 1
                         distance = allCos[idxRetr, idxClue]
                         cosInd = np.where(all_cos_distances == distance)
                         dCont[cosInd] += 1
 
-
             cosDistGroups[i, :] = distGr
             distCont[i, :] = dCont
-        distCont = np.sum(distCont, 0)/len(all_cos_distances)*100
-        #print(distCont)
+            lagCRPProb[i, :] = np.sum(lagM, axis=0)
+        distCont = np.sum(distCont, 0) / len(all_cos_distances) * 100
+        # print(distCont)
 
-        print(lagCRP)
+        lagCRP_method = np.zeros((n_trials, (len(state_sequence) - 1) * 2 + 1))
+        for c in range(n_trials):
+            actCount = lagCRP_trial[c, :]
+            possCount = lagCRPProb[c, :]
+            CRP = np.divide(actCount, possCount)
+            lagCRP_method[c, :] = CRP
+
+        lagCRP_final = np.nanmean(lagCRP_method, axis=0)
 
         d = plt.figure(3)
-        plt.plot(lagCRP / n_trials)
+        plt.plot(lagCRP_final)
         plt.xlabel("Lag")
         plt.ylabel("Cond. Resp. Probability")
-        loc = range(len(lagCRP))
-        labels = list(range(-(len(state_sequence) - 1), len(state_sequence)))
+        loc = np.array([0, 4, 9, 14, 19, 24, 29, 34, 39, 44, 49, 54, 59])  # range(len(lagCRP))
+        labels = [-29, -25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25,
+                  29]  # list(range(-(len(state_sequence) - 1), len(state_sequence)))
         plt.xticks(loc, labels)  # choose which x locations to have ticks
         plt.title("Alpha =" + str(alpha))
-        plt.ylim([0, 1])
+        #plt.ylim([0, 1.5])
         d.show()
-        title = "CRP_alpha" + str(alpha) + ".png"
-        #d.savefig(title, dpi=d.dpi)
+        title = "CRP_alpha_method" + str(alpha) + ".png"
+        d.savefig(title, dpi=d.dpi)
         plt.close()
 
+        #d = plt.figure(3)
+        #plt.plot(lagCRP / n_trials)
+        #plt.xlabel("Lag")
+        #plt.ylabel("Cond. Resp. Probability")
+        #loc = np.array([0, 4, 9, 14, 19, 24, 29, 34, 39, 44, 49, 54, 59])  # range(len(lagCRP))
+        #labels = [-29, -25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25,
+         #         29]  # list(range(-(len(state_sequence) - 1), len(state_sequence)))
+        #plt.xticks(loc, labels)  # choose which x locations to have ticks
+        #plt.title("Alpha =" + str(alpha))
+        #plt.ylim([0, 1.5])
+        #d.show()
+        #title = "CRP_alpha" + str(alpha) + ".png"
+        # d.savefig(title, dpi=d.dpi)
+        #plt.close()
+
         # plot normalised CRP graph for number of words in each lag
-        distCRP = np.array(labels)
+        lab = list(range(-(len(state_sequence) - 1), len(state_sequence)))
+        distCRP = np.array(lab)
         nCRP = np.zeros(len(distCRP))
         # nCRP = nCRP[0]
         for c, nw_CRP in enumerate(distCRP):
@@ -342,20 +393,20 @@ if __name__ == '__main__':
         plt.plot(normCRP)
         plt.xlabel("Lag")
         plt.ylabel("Normalised Cond. Resp. Probability %")
-        loc = range(len(lagCRP))
-        labels = list(range(-(len(state_sequence) - 1), len(state_sequence)))
+        # loc = range(len(lagCRP))
+        # labels = list(range(-(len(state_sequence) - 1), len(state_sequence)))
         plt.xticks(loc, labels)  # choose which x locations to have ticks
         plt.title("Alpha =" + str(alpha))
-        plt.ylim([0, 15])
+        plt.ylim([0, 8])
         e.show()
         title = "Norm_CRP_alpha" + str(alpha) + ".png"
-        #e.savefig(title, dpi=d.dpi)
+        # e.savefig(title, dpi=d.dpi)
         plt.close()
 
-        df = cosDistGroups/len(recall) * 100
+        df = cosDistGroups / len(recall) * 100
         f = plt.figure(5)
         ax = f.add_subplot(111)
-        #bd = ax.add_axes([0, 0, 1, 1])
+        # bd = ax.add_axes([0, 0, 1, 1])
         bp = ax.boxplot(df)
         plt.title("Alpha =" + str(alpha))
         ax.set_xticklabels(['small', 'medium-small',
@@ -364,22 +415,36 @@ if __name__ == '__main__':
         plt.ylabel('Conditional Response Probability %')
         f.show()
         title = "cosDistGroup_alpha" + str(alpha) + ".png"
-        #f.savefig(title, dpi=d.dpi)
-        plt.close()
+        # f.savefig(title, dpi=d.dpi)
+        # plt.close()
 
+        # y = plt.figure(6)
+        # plt.scatter(all_cos_distances, distCont)
+        # # calculate equation for trendline
+        # z = np.polyfit( all_cos_distances, distCont, 1)
+        # p = np.poly1d(z)
+        # # add trendline to plot
+        # plt.plot(all_cos_distances, p(all_cos_distances))
+        # plt.title("Alpha =" + str(alpha))
+        # plt.xlabel("Cosine Distance Word2Vec")
+        # plt.ylabel('Conditional Response Probability %')
+        # y.show()
+        # title = "cosDistCont_alpha" + str(alpha) + ".png"
+        # #y.savefig(title, dpi=d.dpi)
+        # plt.close()
+
+        features = ["CosDist", "recContDist"]
+        df = pd.DataFrame(columns=features)
+        df['CosDist'] = all_cos_distances
+        df['recContDist'] = distCont
         y = plt.figure(6)
-        plt.scatter(distCont, all_cos_distances)
-        # calculate equation for trendline
-        z = np.polyfit(distCont, all_cos_distances, 1)
-        p = np.poly1d(z)
-        # add trendline to plot
-        plt.plot(distCont, p(distCont))
+        sns.regplot(x="CosDist", y="recContDist", data=df, order=2)
         plt.title("Alpha =" + str(alpha))
         plt.xlabel("Cosine Distance Word2Vec")
         plt.ylabel('Conditional Response Probability %')
         y.show()
         title = "cosDistCont_alpha" + str(alpha) + ".png"
-        #y.savefig(title, dpi=d.dpi)
+       # y.savefig(title, dpi=d.dpi)
         plt.close()
 
         # plt.plot(ag.all_retr[0,:])
