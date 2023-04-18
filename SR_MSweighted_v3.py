@@ -4,7 +4,7 @@ import scipy.io as spio
 import seaborn as sns
 import pandas as pd
 
-alphas = [1, 0]# np.linspace(0, 1, 11)
+alphas = [1, 0]  # np.linspace(0, 1, 11)
 n_trials = 500
 alpha_thresh = 0.0001
 c = -1
@@ -13,8 +13,9 @@ lambda_param = 1.17  # (0.0-0.9)  # lateral inhibition strength
 tau = 0.5  # time constant of accumulator
 recall_threshold = 1
 noise_std = 0.0003  # (0.0 - 0.8)
-learning_rate = .1  # learning rate for SR
+learning_rate = .1  # .1  # learning rate for SR
 beta = 40
+decay_time = 1000
 
 mat = spio.loadmat('SemGr_L1.mat',
                    squeeze_me=True)
@@ -48,7 +49,7 @@ class Agent(object):
     """Simple SR learning agent with eligibility traces.
     """
 
-    def __init__(self, n_states, discount=0.95, decay=.8, learning_rate=.05):
+    def __init__(self, n_states, discount=0.95, decay=.8, learning_rate=.05):  # .05):
         # parameters
         self.n = n_states
         self.gamma = discount  # this parameter controls the discount of future states.
@@ -75,23 +76,27 @@ class Agent(object):
         return self.Mcs + self.lr * np.outer(self.trace, error)  # takes two vectors to produce a NxM matrix
 
     def compute_cin(self, state):
-        #self.Msc = self.Mcs.transpose() #np.eye(self.n)
+        # self.Msc = self.Mcs.transpose() #np.eye(self.n)
         self.Msc = np.eye(self.n)
         x = np.eye(self.n)[state]
-        return self.Msc.dot(x)  #self.Msc.dot(np.eye(self.n)[state])  # self.Mcs.transpose() is Msc in Zhouetal manuscript
+        return self.Msc.dot(
+            x)  # self.Msc.dot(np.eye(self.n)[state])  # self.Mcs.transpose() is Msc in Zhouetal manuscript
 
     def update_trace(self, state):
         # Vector addiction of trace vector and state vector 0,0,...1...0,0
         self.Cin = self.compute_cin(state)
         return self.gamma * self.decay * self.trace + self.Cin
-        #self.trace = self.gamma * self.decay * self.trace + np.eye(self.n)[state]
+        # self.trace = self.gamma * self.decay * self.trace + np.eye(self.n)[state]
+
+    def decay_trace(self):
+        self.trace = self.gamma * self.decay * self.trace
 
     def reset_trace(self):
         self.trace = np.zeros(self.n)
 
     def reset_matrix(self):
         self.Mcs = np.zeros((self.n, self.n))
-        #self.Msc = np.eye(self.n)
+        # self.Msc = np.eye(self.n)
 
     def reset_x(self):
         self.x = np.zeros(self.n)
@@ -114,21 +119,21 @@ class Agent(object):
 
             while True:
                 self.update_accumulator(Cv, f_strength)
-                accumulator_values.append(ag.x)  # moved to line 77
-                if np.any(ag.x > recall_threshold):
-                    crossed_thresh_idx = np.argwhere(ag.x > recall_threshold)
+                accumulator_values.append(self.x)  # moved to line 77
+                if np.any(self.x > recall_threshold):
+                    crossed_thresh_idx = np.argwhere(self.x > recall_threshold)
                     recalled_word = np.random.choice(crossed_thresh_idx[:, 0])
 
-                    ag.all_recall.append(recalled_word)
+                    self.all_recall.append(recalled_word)
 
-                    if recalled_word not in ag.recalled_word_sequence:
-                        ag.recalled_word_sequence.append(recalled_word)
-                        accumulator_values.append(ag.x)
-                    ag.x[
+                    if recalled_word not in self.recalled_word_sequence:
+                        self.recalled_word_sequence.append(recalled_word)
+                        accumulator_values.append(self.x)
+                    self.x[
                         recalled_word] = 0  # TODO: if recalled word was recalled before, reset to zero but don't recall
                     break
-            ag.update_trace(recalled_word)
-        return ag.recalled_word_sequence, np.array(accumulator_values)
+            self.update_trace(recalled_word)
+        return self.recalled_word_sequence, np.array(accumulator_values)
 
     def do_free_recall_sampling(self, recall_length, aph):
         self.Q = aph * self.Mcs + (1 - aph) * self.S
@@ -138,14 +143,20 @@ class Agent(object):
         for _ in range(recall_length):
             f_strength = np.matmul(self.trace, self.Q)
             f_strength[already_recalled] = 0
-            recall_prob = f_strength / f_strength.sum()
+            if f_strength.sum() == 0:
+                recall_prob = np.ones(len(f_strength))
+                recall_prob[already_recalled] = 0
+                recall_prob /= recall_prob.sum()
+            else:
+                recall_prob = f_strength / f_strength.sum()
             recalled_word = np.random.choice(np.arange(len(recall_prob)), p=recall_prob)
             self.trace = self.update_trace(recalled_word)
             already_recalled[recalled_word] = True
             recall_list.append(recalled_word)
 
             unique, counts = np.unique(recall_list, return_counts=True)
-            assert not np.any(counts > 1)
+            if np.any(counts > 1):
+                print('stop')
         return recall_list
 
     def _do_free_recall_LBA(self, recall_length, aph):
@@ -195,13 +206,13 @@ class Agent(object):
         :return:
         """
 
-        ag.x[ag.recalled_word_sequence] = 0
+        self.x[ag.recalled_word_sequence] = 0
         noise = np.random.normal(0, noise_std, len(word_list))
         scaled_input = tau * coef_var * input_vector
-        updated_state_vector = np.matmul(1 - tau * kappa - lambda_param * tau * L, ag.x)
+        updated_state_vector = np.matmul(1 - tau * kappa - lambda_param * tau * L, self.x)
 
-        ag.x = updated_state_vector + scaled_input + noise
-        ag.x = np.maximum(ag.x, 0)
+        self.x = updated_state_vector + scaled_input + noise
+        self.x = np.maximum(ag.x, 0)
 
 
 if __name__ == '__main__':
@@ -246,10 +257,16 @@ if __name__ == '__main__':
             # individually)
             for t in range(len(state_sequence) - 1):
                 ag.update(state_sequence[t], state_sequence[t + 1])
+                # ag.decay_trace()
 
             ag.SR_Ms[:, :, trial] = ag.Mcs
 
-            # ADD FREE RECALL AFTER EACH TRIAL HERE
+            # Delay between learning and recall
+          #  for t in range(decay_time):
+           #              ag.decay_trace()
+
+            ag.reset_trace()
+
             recalled_words = ag.do_free_recall_sampling(number_of_recalls, alpha)
             while len(recalled_words) < ag.n:
                 recalled_words.append(np.nan)
@@ -290,7 +307,7 @@ if __name__ == '__main__':
         f.show()
         title = "firstRecall_alpha" + str(alpha) + ".png"
         # f.savefig(title, dpi=f.dpi)
-        #plt.close()
+        # plt.close()
 
         # plot probability of recall
 
@@ -309,11 +326,11 @@ if __name__ == '__main__':
         labels = [1, 5, 10, 15, 20, 25, 29]  # list(range(-(len(state_sequence) - 1), len(state_sequence)))
         plt.xticks(loc, labels)  # choose which x locations to have ticks
         plt.title("Alpha =" + str(alpha))
-        plt.ylim([0.8, 1])
+        plt.ylim([0, 1])
         g.show()
         title = "Recall_alpha" + str(alpha) + ".png"
         # g.savefig(title, dpi=g.dpi)
-        #plt.close()
+        # plt.close()
 
         # plot probability of recall given lag
 
@@ -322,13 +339,13 @@ if __name__ == '__main__':
         lagCond_trial = np.zeros((n_trials, (len(state_sequence) - 1) * 2 + 1))
         cosDistGroups = np.zeros((n_trials, 4))
         distCont = np.zeros((n_trials, len(all_cos_distances)))
-        lagCRPProb = np.zeros((n_trials, (len(state_sequence) - 1) * 2+1))
+        lagCRPProb = np.zeros((n_trials, (len(state_sequence) - 1) * 2 + 1))
 
         for i, recall in enumerate(all_recalled_words):
             distGr = np.zeros(4)
             dCont = np.zeros(len(all_cos_distances))
             lagMatrix = np.zeros((ag.n, (len(state_sequence) - 1) * 2))
-            lagM =  np.zeros((ag.n, (len(state_sequence) - 1) * 2+1))
+            lagM = np.zeros((ag.n, (len(state_sequence) - 1) * 2 + 1))
 
             for r in range(ag.n):
                 lagMatrix[r, len(state_sequence) - 1 - r:len(state_sequence) - r + len(state_sequence) - 2] = np.ones(
@@ -336,10 +353,8 @@ if __name__ == '__main__':
 
             lagMatrix = np.insert(lagMatrix, len(state_sequence) - 1, [0], axis=1)
 
-
             for w, word in enumerate(recall):
                 idxClue = [i for i, j in enumerate(state_sequence) if j == word]
-
 
                 if len(idxClue) > 0:
                     lagM[w, :] = lagMatrix[idxClue[0], :]
@@ -372,6 +387,7 @@ if __name__ == '__main__':
             actCount = lagCRP_trial[c, :]
             possCount = lagCRPProb[c, :]
             CRP = np.divide(actCount, possCount)
+            CRP[np.isnan(CRP)] = 0
             lagCRP_method[c, :] = CRP
 
         lagCRP_final = np.nanmean(lagCRP_method, axis=0)
@@ -385,51 +401,51 @@ if __name__ == '__main__':
                   29]  # list(range(-(len(state_sequence) - 1), len(state_sequence)))
         plt.xticks(loc, labels)  # choose which x locations to have ticks
         plt.title("Alpha =" + str(alpha))
-        #plt.ylim([0, 1.5])
+        # plt.ylim([0, 1.5])
         d.show()
         title = "CRP_alpha_method" + str(alpha) + ".png"
-        #d.savefig(title, dpi=d.dpi)
-        #plt.close()
-
-        #d = plt.figure(3)
-        #plt.plot(lagCRP / n_trials)
-        #plt.xlabel("Lag")
-        #plt.ylabel("Cond. Resp. Probability")
-        #loc = np.array([0, 4, 9, 14, 19, 24, 29, 34, 39, 44, 49, 54, 59])  # range(len(lagCRP))
-        #labels = [-29, -25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25,
-         #         29]  # list(range(-(len(state_sequence) - 1), len(state_sequence)))
-        #plt.xticks(loc, labels)  # choose which x locations to have ticks
-        #plt.title("Alpha =" + str(alpha))
-        #plt.ylim([0, 1.5])
-        #d.show()
-        #title = "CRP_alpha" + str(alpha) + ".png"
         # d.savefig(title, dpi=d.dpi)
-        #plt.close()
+        # plt.close()
+
+        # d = plt.figure(3)
+        # plt.plot(lagCRP / n_trials)
+        # plt.xlabel("Lag")
+        # plt.ylabel("Cond. Resp. Probability")
+        # loc = np.array([0, 4, 9, 14, 19, 24, 29, 34, 39, 44, 49, 54, 59])  # range(len(lagCRP))
+        # labels = [-29, -25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25,
+        #         29]  # list(range(-(len(state_sequence) - 1), len(state_sequence)))
+        # plt.xticks(loc, labels)  # choose which x locations to have ticks
+        # plt.title("Alpha =" + str(alpha))
+        # plt.ylim([0, 1.5])
+        # d.show()
+        # title = "CRP_alpha" + str(alpha) + ".png"
+        # d.savefig(title, dpi=d.dpi)
+        # plt.close()
 
         # plot normalised CRP graph for number of words in each lag
-        lab = list(range(-(len(state_sequence) - 1), len(state_sequence)))
-        distCRP = np.array(lab)
-        nCRP = np.zeros(len(distCRP))
+        # lab = list(range(-(len(state_sequence) - 1), len(state_sequence)))
+        # distCRP = np.array(lab)
+        # nCRP = np.zeros(len(distCRP))
         # nCRP = nCRP[0]
-        for c, nw_CRP in enumerate(distCRP):
-            crp = len(state_sequence) - abs(nw_CRP)
-            nCRP[c] = crp
-        nCRP[len(state_sequence) - 1] = 0
+        # for c, nw_CRP in enumerate(distCRP):
+        #   crp = len(state_sequence) - abs(nw_CRP)
+        #  nCRP[c] = crp
+        # nCRP[len(state_sequence) - 1] = 0
 
-        e = plt.figure(4)
-        normCRP = 100 * lagCRP / (n_trials * nCRP)
-        plt.plot(normCRP)
-        plt.xlabel("Lag")
-        plt.ylabel("Normalised Cond. Resp. Probability %")
+        # e = plt.figure(4)
+        # normCRP = 100 * lagCRP_final / (n_trials * nCRP)
+        # plt.plot(normCRP)
+        # plt.xlabel("Lag")
+        # plt.ylabel("Normalised Cond. Resp. Probability %")
         # loc = range(len(lagCRP))
         # labels = list(range(-(len(state_sequence) - 1), len(state_sequence)))
-        plt.xticks(loc, labels)  # choose which x locations to have ticks
-        plt.title("Alpha =" + str(alpha))
-        plt.ylim([0, 8])
-        e.show()
-        title = "Norm_CRP_alpha" + str(alpha) + ".png"
+        # plt.xticks(loc, labels)  # choose which x locations to have ticks
+        # plt.title("Alpha =" + str(alpha))
+        # .ylim([0, 8])
+        # e.show()
+        # title = "Norm_CRP_alpha" + str(alpha) + ".png"
         # e.savefig(title, dpi=d.dpi)
-        #plt.close()
+        # plt.close()
 
         df = cosDistGroups / len(recall) * 100
         f = plt.figure(5)
@@ -472,30 +488,30 @@ if __name__ == '__main__':
         plt.ylabel('Conditional Response Probability %')
         y.show()
         title = "cosDistCont_alpha" + str(alpha) + ".png"
-       # y.savefig(title, dpi=d.dpi)
-        #plt.close()
+    # y.savefig(title, dpi=d.dpi)
+    # plt.close()
 
-        # plt.plot(ag.all_retr[0,:])
-        # plt.show()
+    # plt.plot(ag.all_retr[0,:])
+    # plt.show()
 
-        # plt.imshow(ag.all_retr)
-        # plt.colorbar()
-        # plt.show()
+    # plt.imshow(ag.all_retr)
+    # plt.colorbar()
+    # plt.show()
 
-        # print(ag.M)
-        # plt.imshow(ag.M);
-        # plt.colorbar()
-        # plt.show()
+    # print(ag.M)
+    # plt.imshow(ag.M);
+    # plt.colorbar()
+    # plt.show()
 
-        # mStr_IA = np.average(ag.SR_Ms[8, 0, :])
-        # mStr_IB = np.average(ag.SR_Ms[8, 1, :])
-        # mStr_AB = np.average(ag.SR_Ms[0, 1, :])
+    # mStr_IA = np.average(ag.SR_Ms[8, 0, :])
+    # mStr_IB = np.average(ag.SR_Ms[8, 1, :])
+    # mStr_AB = np.average(ag.SR_Ms[0, 1, :])
 
-        # print(mStr_IA)
-        # print(mStr_IB)
-        # print(mStr_AB)
+    # print(mStr_IA)
+    # print(mStr_IB)
+    # print(mStr_AB)
 
-        # plot SR matrix:
-        # plt.imshow(ag.M)
-        # plt.colorbar()
-        # plt.show()
+    # plot SR matrix:
+    # plt.imshow(ag.M)
+    # plt.colorbar()
+    # plt.show()
