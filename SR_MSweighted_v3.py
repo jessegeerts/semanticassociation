@@ -4,6 +4,10 @@ import scipy.io as spio
 import seaborn as sns
 import pandas as pd
 
+from utils import softmax
+
+
+# Define parameters
 alphas = [1, 0]  # np.linspace(0, 1, 11)
 n_trials = 500
 alpha_thresh = 0.0001
@@ -15,56 +19,36 @@ recall_threshold = 1
 noise_std = 0.0003  # (0.0 - 0.8)
 learning_rate = .1  # .1  # learning rate for SR
 beta = 40
-decay_time = 1000
+decay_time = 1000  # number of time steps delay between learning and recall
 
-mat = spio.loadmat('SemGr_L1.mat',
-                   squeeze_me=True)
-groupDist = mat['semDistGroups']
-
-mat = spio.loadmat('allCosL1.mat', squeeze_me=True)
-allCos = mat['allCos']
-
-all_cos_distances = []
-
-for i in range(allCos.shape[0]):
-    for j in range(i, allCos.shape[1]):
-        all_cos_distances.append(allCos[i, j])
-all_cos_distances = np.sort(all_cos_distances)
-
-
-def softmax(x, beta):
-    """Compute the softmax function.
-    :param x: Data
-    :param beta: Inverse temperature parameter.
-    :return:
-    """
-    x = np.array(x)
-    return np.exp(beta * x) / sum(np.exp(beta * x))
-
-
-cosDist = softmax(allCos, beta)
+# load data pertaining to semantic distances
+group_dist = spio.loadmat('SemGr_L1.mat', squeeze_me=True)['semDistGroups']
+cos_dist_mat = spio.loadmat('allCosL1.mat', squeeze_me=True)['allCos']
+# get array of all cosine distances between words (i.e. all elements in upper triangle of cos_dist_mat
+all_cos_distances = np.sort([cos_dist_mat[i, j] for i, j in zip(*np.triu_indices(cos_dist_mat.shape[0], k=0))])
+cos_dist_as_probability = softmax(cos_dist_mat, beta)  # note, normalized such that each column sums to 1
 
 
 class Agent(object):
     """Simple SR learning agent with eligibility traces.
     """
-
-    def __init__(self, n_states, discount=0.95, decay=.8, learning_rate=.05):  # .05):
+    def __init__(self, n_states, discount=0.95, decay=.5, learning_rate=.05, beta=.5):  # .05):
         # parameters
         self.n = n_states
         self.gamma = discount  # this parameter controls the discount of future states.
         self.decay = decay  # this parameter controls the decay of the eligibility trace.
         self.lr = learning_rate
+        self.beta = beta  # this parameter controls the strength of new inputs in the trace
 
         # initialise
         self.Mcs = np.zeros((self.n, self.n))  # the SR matrix
         self.Msc = np.eye(self.n)
-        self.S = cosDist  # the SR matrix with semantic distances
+        self.S = cos_dist_as_probability  # the SR matrix with semantic distances
         self.Q = np.zeros((self.n, self.n))  # weighted SR matrix
         self.trace = np.zeros(self.n)  # vector of eligibility traces
         self.SR_Ms = np.zeros((self.n, self.n, n_trials))
         self.all_retr = np.zeros((n_trials, self.n))
-        self.x = np.zeros(self.n)
+        self.x = np.zeros(self.n)  # FIXME: why is this here? what is it?
         self.rec = np.zeros((n_trials, self.n))
 
     def update(self, state, next_state):
@@ -75,17 +59,19 @@ class Agent(object):
         error = np.eye(self.n)[next_state] + self.gamma * self.Mcs[next_state] - self.Mcs[state]
         return self.Mcs + self.lr * np.outer(self.trace, error)  # takes two vectors to produce a NxM matrix
 
-    def compute_cin(self, state):
-        # self.Msc = self.Mcs.transpose() #np.eye(self.n)
-        self.Msc = np.eye(self.n)
+    def compute_cin(self, state, backward_sampling=False):
+        if backward_sampling:
+            self.Msc = self.Mcs.transpose() #np.eye(self.n)
+        else:
+            self.Msc = np.eye(self.n)
         x = np.eye(self.n)[state]
         return self.Msc.dot(
             x)  # self.Msc.dot(np.eye(self.n)[state])  # self.Mcs.transpose() is Msc in Zhouetal manuscript
 
-    def update_trace(self, state):
+    def update_trace(self, state, backward_sampling=False):
         # Vector addiction of trace vector and state vector 0,0,...1...0,0
-        self.Cin = self.compute_cin(state)
-        return self.gamma * self.decay * self.trace + self.Cin
+        self.Cin = self.compute_cin(state, backward_sampling=backward_sampling)
+        return self.decay * self.trace + self.beta * self.Cin
         # self.trace = self.gamma * self.decay * self.trace + np.eye(self.n)[state]
 
     def decay_trace(self):
@@ -101,118 +87,45 @@ class Agent(object):
     def reset_x(self):
         self.x = np.zeros(self.n)
 
-    def _do_free_recall(self, recall_length, aph):
-        """Function to output list of recalled words.
-        """
-        ag.recalled_word_sequence = []
-        accumulator_values = []
-        ag.all_recall = []
-        ag.Q = aph * ag.M + (1 - aph) * ag.S
+    def reset(self):
+        self.reset_trace()
+        self.reset_matrix()
+        self.reset_x()
 
-        for w in recall_length:
+    def do_free_recall_sampling(self, p_stop=.05, aph=1., backward_sampling=False):
+        # Compute Q matrix as a weighted sum of Mcs and S
+        self.Q = aph * self.Mcs + (1. - aph) * self.S
 
-            ctx_vec = ag.trace  # contex vector  # TODO: figure out whether context vector should be set to zero
-            f_strength = np.matmul(ctx_vec, ag.Q)
-            ag.all_retr[trial, :] = f_strength
-            filtered = [x for x in f_strength if x > alpha_thresh]
-            Cv = np.std(filtered) / np.mean(filtered)
-
-            while True:
-                self.update_accumulator(Cv, f_strength)
-                accumulator_values.append(self.x)  # moved to line 77
-                if np.any(self.x > recall_threshold):
-                    crossed_thresh_idx = np.argwhere(self.x > recall_threshold)
-                    recalled_word = np.random.choice(crossed_thresh_idx[:, 0])
-
-                    self.all_recall.append(recalled_word)
-
-                    if recalled_word not in self.recalled_word_sequence:
-                        self.recalled_word_sequence.append(recalled_word)
-                        accumulator_values.append(self.x)
-                    self.x[
-                        recalled_word] = 0  # TODO: if recalled word was recalled before, reset to zero but don't recall
-                    break
-            self.update_trace(recalled_word)
-        return self.recalled_word_sequence, np.array(accumulator_values)
-
-    def do_free_recall_sampling(self, recall_length, aph):
-        self.Q = aph * self.Mcs + (1 - aph) * self.S
+        # Initialise trace and recall list
         already_recalled = np.zeros(self.n, dtype=bool)
+        recall_list = [np.nan] * self.n
 
-        recall_list = []
-        for _ in range(recall_length):
+        for i in range(self.n):
+            if np.random.rand() < p_stop:
+                break
+            # Compute activation strengths
             f_strength = np.matmul(self.trace, self.Q)
             f_strength[already_recalled] = 0
+
             if f_strength.sum() == 0:
                 recall_prob = np.ones(len(f_strength))
                 recall_prob[already_recalled] = 0
                 recall_prob /= recall_prob.sum()
             else:
                 recall_prob = f_strength / f_strength.sum()
+
+            # Randomly select an item to recall
             recalled_word = np.random.choice(np.arange(len(recall_prob)), p=recall_prob)
-            self.trace = self.update_trace(recalled_word)
+
+            # Update trace and recall list
+            self.trace = self.update_trace(recalled_word, backward_sampling=backward_sampling)
             already_recalled[recalled_word] = True
-            recall_list.append(recalled_word)
+            recall_list[i] = recalled_word
 
             unique, counts = np.unique(recall_list, return_counts=True)
             if np.any(counts > 1):
-                print('stop')
+                print('Warning: Repeated items in recall list')
         return recall_list
-
-    def _do_free_recall_LBA(self, recall_length, aph):
-
-        scale = .2  # width of normal distribution that we draw slope from
-        max_intercept = 1.
-        threshold = 1.
-        self.Q = aph * self.Mcs + (1 - aph) * self.S
-
-        already_recalled = np.zeros(self.n, dtype=bool)
-
-        recall_list = []
-
-        for w in recall_length:
-            ctx_vec = self.trace
-            f_strength = np.matmul(ctx_vec, self.Q)
-
-            slope = np.random.normal(f_strength, scale)
-            if np.all(slope[~already_recalled] <= 0):
-                break
-            slope[slope < 0] = np.finfo(float).eps
-            intercept = np.random.uniform(0, max_intercept, size=len(f_strength))
-
-            time_to_threshold = (threshold - intercept) / slope
-            time_to_threshold[already_recalled] = np.nan
-            recalled_word = np.nanargmin(time_to_threshold)
-
-            self.trace = self.update_trace(recalled_word)
-            already_recalled[recalled_word] = True
-            recall_list.append(recalled_word)
-
-            unique, counts = np.unique(recall_list, return_counts=True)
-            if np.any(counts > 1):
-                print('break')
-
-        return recall_list
-
-    def update_accumulator(self, coef_var, input_vector):
-        """Update the accumulator of Sederberg et al.
-
-        According to (Usher & McClelland, 2001, from Sederberg et al. 2008):
-        xs(ag.x) = (1-tk-tdL)x_s0 + t*Cv*f_strength + e ; xs = max(xs,0)
-
-
-        :param coef_var: coefficient of variation
-        :param input_vector:
-        :return:
-        """
-
-        self.x[ag.recalled_word_sequence] = 0
-        noise = np.random.normal(0, noise_std, len(word_list))
-        scaled_input = tau * coef_var * input_vector
-        updated_state_vector = np.matmul(1 - tau * kappa - lambda_param * tau * L, self.x)
-
-        self.x = updated_state_vector + scaled_input + noise
-        self.x = np.maximum(ag.x, 0)
 
 
 if __name__ == '__main__':
@@ -244,8 +157,6 @@ if __name__ == '__main__':
         # initialise agent:
         ag = Agent(len(word_list), learning_rate=learning_rate, decay=.95)
 
-        L = np.ones((len(word_list), len(word_list))) - np.eye(len(word_list))
-
         all_recalled_words = []
         # learn for a given number of trials.
 
@@ -262,8 +173,8 @@ if __name__ == '__main__':
             ag.SR_Ms[:, :, trial] = ag.Mcs
 
             # Delay between learning and recall
-          #  for t in range(decay_time):
-           #              ag.decay_trace()
+            for t in range(decay_time):
+                ag.decay_trace()
 
             ag.reset_trace()
 
@@ -370,9 +281,9 @@ if __name__ == '__main__':
                         lag = min(diffLag, key=abs)
                         lagCRP[lag + len(state_sequence) - 1] += 1
                         lagCRP_trial[i, lag + len(state_sequence) - 1] += 1
-                        dGroup = groupDist[idxRetr, idxClue]
+                        dGroup = group_dist[idxRetr, idxClue]
                         distGr[dGroup - 1] += 1
-                        distance = allCos[idxRetr, idxClue]
+                        distance = cos_dist_mat[idxRetr, idxClue]
                         cosInd = np.where(all_cos_distances == distance)
                         dCont[cosInd] += 1
 
