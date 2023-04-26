@@ -36,9 +36,11 @@ class Agent(object):
         # parameters
         self.n = n_states
         self.gamma = discount  # this parameter controls the discount of future states.
-        self.decay = decay  # this parameter controls the decay of the eligibility trace.
+        self.rho = decay  # this parameter controls the decay of the eligibility trace.
         self.lr = learning_rate
         self.beta = beta  # this parameter controls the strength of new inputs in the trace
+        self.rho_encoding = .5
+        self.beta_encoding = .5  # TODO: maybe encoding and retrieval parameters should be the same. Check.
 
         # initialise
         self.Mcs = np.zeros((self.n, self.n))  # the SR matrix
@@ -50,6 +52,7 @@ class Agent(object):
         self.all_retr = np.zeros((n_trials, self.n))
         self.x = np.zeros(self.n)  # FIXME: why is this here? what is it?
         self.rec = np.zeros((n_trials, self.n))
+        self.Cin = None
 
     def update(self, state, next_state):
         self.trace = self.update_trace(state)
@@ -61,21 +64,24 @@ class Agent(object):
 
     def compute_cin(self, state, backward_sampling=False):
         if backward_sampling:
-            self.Msc = self.Mcs.transpose() #np.eye(self.n)
+            self.Msc = self.Mcs.transpose()
         else:
             self.Msc = np.eye(self.n)
         x = np.eye(self.n)[state]
         return self.Msc.dot(
-            x)  # self.Msc.dot(np.eye(self.n)[state])  # self.Mcs.transpose() is Msc in Zhouetal manuscript
+            x)
 
-    def update_trace(self, state, backward_sampling=False):
-        # Vector addiction of trace vector and state vector 0,0,...1...0,0
-        self.Cin = self.compute_cin(state, backward_sampling=backward_sampling)
-        return self.decay * self.trace + self.beta * self.Cin
-        # self.trace = self.gamma * self.decay * self.trace + np.eye(self.n)[state]
+    def update_trace(self, state, backward_sampling=False, recall_phase=False):
+        if recall_phase:
+            # Vector addiction of trace vector and state vector 0,0,...1...0,0
+            self.Cin = self.compute_cin(state, backward_sampling=backward_sampling)
+            return self.rho * self.trace + self.beta * self.Cin
+        else:  # during encoding
+            self.Cin = self.compute_cin(state)
+            return self.rho_encoding * self.trace + self.beta_encoding * self.Cin
 
     def decay_trace(self):
-        self.trace = self.gamma * self.decay * self.trace
+        self.trace = self.gamma * self.rho * self.trace
 
     def reset_trace(self):
         self.trace = np.zeros(self.n)
@@ -97,7 +103,6 @@ class Agent(object):
         self.Q = aph * self.Mcs + (1. - aph) * self.S
 
         # Initialise trace and recall list
-        already_recalled = np.zeros(self.n, dtype=bool)
         recall_list = [np.nan] * self.n
 
         for i in range(self.n):
@@ -105,11 +110,9 @@ class Agent(object):
                 break
             # Compute activation strengths
             f_strength = np.matmul(self.trace, self.Q)
-            f_strength[already_recalled] = 0
 
             if f_strength.sum() == 0:
                 recall_prob = np.ones(len(f_strength))
-                recall_prob[already_recalled] = 0
                 recall_prob /= recall_prob.sum()
             else:
                 recall_prob = f_strength / f_strength.sum()
@@ -118,13 +121,9 @@ class Agent(object):
             recalled_word = np.random.choice(np.arange(len(recall_prob)), p=recall_prob)
 
             # Update trace and recall list
-            self.trace = self.update_trace(recalled_word, backward_sampling=backward_sampling)
-            already_recalled[recalled_word] = True
+            self.trace = self.update_trace(recalled_word, backward_sampling=backward_sampling, recall_phase=True)
             recall_list[i] = recalled_word
 
-            unique, counts = np.unique(recall_list, return_counts=True)
-            if np.any(counts > 1):
-                print('Warning: Repeated items in recall list')
         return recall_list
 
 
