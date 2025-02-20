@@ -9,8 +9,9 @@ import gensim as gen
 import random
 import gensim.downloader as api
 from gensim.models import KeyedVectors
+import scipy
 
-
+# list of noun taken from https://memory.psych.upenn.edu/Word_Pools iEEG pool of common words
 common_nouns = [
     "ANT", "APE", "ARK", "ARM", "AXE", "BADGE", "BAG", "BALL", "BAND", "BANK",
     "BARN", "BAT", "BATH", "BEACH", "BEAK", "BEAN", "BEAR", "BED", "BEE", "BELL",
@@ -48,13 +49,18 @@ common_nouns = [
     "WHALE", "WHEEL", "WING", "WOLF", "WOOD", "WORLD", "WORM", "YARD", "ZOO"
 ]
 
+# run this only once
 #nltk.download("wordnet")
 # Extract common English nouns from WordNet
 #common_nouns = set(word.lower() for word in wn.all_lemma_names(pos='n'))
+
+
 # Create 50 different lists of 30 nouns each
 n_lists = 50  # Number of lists
 list_length = 30
 word_lists = [random.sample(list(common_nouns), list_length) for _ in range(n_lists)]
+
+
 # run this only the first time
 # model = api.load("word2vec-google-news-300")
 # model.save("word2vec_model.bin")
@@ -72,6 +78,7 @@ def softmax(x, beta):
     """
     x = np.array(x)
     return np.exp(beta * x) / sum(np.exp(beta * x))
+
 
 def cosine_distance_matrix(words, beta, model):
     n = len(words)
@@ -118,7 +125,7 @@ class Agent(object):
     """Simple SR learning agent with eligibility traces.
     """
 
-    def __init__(self, list, n_states, discount=0.95, decay=.5, learning_rate=.05, theta=0.5):  # .05):
+    def __init__(self, ls, n_states, discount=0.95, decay=.5, learning_rate=.05, theta=0.5):  # .05):
         # parameters
         self.n = n_states
         self.gamma = discount  # this parameter controls the discount of future states.
@@ -131,7 +138,7 @@ class Agent(object):
         # initialise
         self.Mcs = np.zeros((self.n, self.n))  # the SR matrix
         self.Msc = np.eye(self.n)
-        self.S = cos_dist_as_probability[list]  # the SR matrix with semantic distances
+        self.S = cos_dist_as_probability[ls]  # the SR matrix with semantic distances
         self.Q = np.zeros((self.n, self.n))  # weighted SR matrix
         self.trace = np.zeros(self.n)  # vector of eligibility traces
         self.SR_Ms = np.zeros((self.n, self.n, n_trials))
@@ -220,110 +227,96 @@ class Agent(object):
         return recall_list, recall_prob_list
 
 
-def generate_data(alpha, list):
-
-    ag = Agent(list, len(word_list), learning_rate=learning_rate, decay=.95)
-    word_sequence = word_lists[list]
-    state_sequence = [word_index[word] for word in word_sequence]
+def generate_data(alpha, ls):
+    """Generates recalled words and their probabilities for a given list."""
+    word_list = word_lists[ls]
+    ag = Agent(ls, len(word_list), learning_rate=learning_rate, decay=.95)
+    word_index = {word: i for i, word in enumerate(word_list)}
+    state_sequence = [word_index[word] for word in word_list]
 
     for trial in range(n_trials):
-        all_recalled_words = []
-        all_recalled_prob = []
-        # learn for a given number of trials.
         ag.reset_trace()
         ag.reset_matrix()
         ag.reset_x()
-        # learning over M does not accumulate across different trials (each trial is tested with free recall
-        # individually)
+
         for t in range(len(state_sequence) - 1):
             ag.update(state_sequence[t], state_sequence[t + 1])
-            # ag.decay_trace()
 
         ag.SR_Ms[:, :, trial] = ag.Mcs
 
-        # Delay between learning and recall
         for t in range(decay_time):
             ag.decay_trace()
 
-        # ag.reset_trace()
-
         recalled_words, recall_prob_words = ag.do_free_recall_sampling(p_stop=.05, aph=alpha)
+
+        # Ensure probabilities are a NumPy array
         recall_prob_words = np.array(recall_prob_words)
 
+        # Pad recalled words to maintain consistent length
         while len(recalled_words) < ag.n:
             recalled_words.append(np.nan)
-        all_recalled_words.append(recalled_words)
-        all_recalled_prob.append(recall_prob_words)
 
-        all_recalled_prob = np.array(all_recalled_prob)
+    return recalled_words, recall_prob_words
 
-    return all_recalled_words, all_recalled_prob
 
-def llik_td(all_recalled_words, all_recalled_prob):
-    # Extract the arguments as they are passed by scipy.optimize.minimize
-    logp_recall = np.zeros(list_length)
-    logp_recall[:] = np.nan
+def llik_td_list(recalled_words, recall_prob):
+    """Computes the negative log-likelihood for a recalled list."""
+    logp_recall = np.full(list_length, np.nan)  # Initialize with NaN
 
-    words_recalled = np.array(all_recalled_words)
-    prob_words = np.squeeze(all_recalled_prob)
-    for w in range(np.size(prob_words, 0)):
+    words_recalled = np.array(recalled_words)
+    prob_words = np.array(recall_prob)
+    #prob_words = np.squeeze(recall_prob)
+
+    for w in range(prob_words.shape[0]):
         try:
-            pw = int(words_recalled[0, w])
+            if not np.isnan(words_recalled[w]):  # ✅ Check for NaN before conversion
+                pw = int(words_recalled[w])
+                logp_recall[w] = np.log(prob_words[w, pw] + 1e-10)  # Avoid log(0)
+        except IndexError as e:
+            print(f"IndexError at w={w}, pw={pw}: {e}")
 
-            logp_recall[w] = np.log(prob_words[w, pw]) #sum over the probability of the word that was recall
-        except:
-            print([w, pw])
+    return -np.nansum(logp_recall)
 
-            # Return the negative log likelihood of all observed actions
-            #logp_ns[t] = -np.sum(logp_recall[1:])
 
-    logp_ns = -np.nansum(logp_recall)
+def llik_td(alpha, all_recalled_words, all_recalled_probs):
+    """Computes the total negative log-likelihood across all lists."""
+    logp_ns_lists = np.zeros(n_lists)
 
-    return logp_ns
+    for ls in range(n_lists -1):
+        logp_ns_lists[ls] = llik_td_list(all_recalled_words[ls], all_recalled_probs[ls])
+
+    return np.nansum(logp_ns_lists)
 
 
 if __name__ == '__main__':
-
-    # some example input words:
-    #text_body = 'A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 1 2 3 4'
-
-    # generate some word sequence from the body of text (the word sequence the agent will see)
-
-    # word_sequence = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
-                   #  'U', 'V', 'W', 'X', 'Y', 'Z', '1', '2', '3', '4']
-
-  #  word_sequence =
-    # translate to state indices:
-    #word_sequence = word_lists[ls]
- #   state_sequence = [word_index[word] for word in word_sequence]
-   # word_order = [word_index[word] for word in word_list]
-   # number_of_recalls = len(word_index) - 10
-
+    """Main execution loop that avoids duplicate calls to generate_data."""
 
     for a in range(len(alphas)):
         alpha = alphas[a]
-        logp_ns = np.zeros(n_lists)
-        all_lists_recalled = []
-        # generate some data
+        logp_ns_all = np.zeros(n_lists)
+        all_recalled_words = []
+        all_recalled_probs = []
 
-        for ls in range(n_lists -1):
+        for ls in range(n_lists - 1):
+            recalled_words, recall_prob = generate_data(alpha, ls)
+            logp_ns_all[ls] = llik_td_list(recalled_words, recall_prob)
 
-            word_list = word_lists[ls]
-            sequence_length = len(word_list)
-            # associate each word with a unique state index:
-            word_index = {}
-            idx = 0
-            for word in word_list:
-                if word not in word_index:
-                    word_index[word] = idx
-                    idx += 1
+            all_recalled_words.append(recalled_words)
+            all_recalled_probs.append(recall_prob)
 
-            all_recalled_words, all_recalled_prob = generate_data(alpha, ls)
+        # Convert lists to NumPy arrays for consistency
+        all_recalled_words = np.array(all_recalled_words, dtype=object)
+        all_recalled_probs = np.array(all_recalled_probs, dtype=object)
 
-            print(alpha)
+        # Compute log-likelihood only ONCE using precomputed recall data
+        logp_ns = llik_td(alpha, all_recalled_words, all_recalled_probs)
 
-            logp_ns[ls] = llik_td(all_recalled_words, all_recalled_prob)
-            all_lists_recalled.append(all_recalled_words)
+        result = scipy.optimize.minimize(llik_td, alpha, args=(all_recalled_words, all_recalled_probs), method="BFGS")
+
+        print(result)
+        print("")
+        print(f"MLE: alpha = {result.x[0]:.2f} (true value = {alpha})")
+
+    print('done')
 
 
-        print('done')
