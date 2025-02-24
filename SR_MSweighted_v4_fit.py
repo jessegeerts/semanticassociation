@@ -11,6 +11,7 @@ import gensim.downloader as api
 from gensim.models import KeyedVectors
 import scipy
 
+
 # list of noun taken from https://memory.psych.upenn.edu/Word_Pools iEEG pool of common words
 common_nouns = [
     "ANT", "APE", "ARK", "ARM", "AXE", "BADGE", "BAG", "BALL", "BAND", "BANK",
@@ -95,14 +96,12 @@ def cosine_distance_matrix(words, beta, model):
     return cos_dist_probability
 
 
-# Define parameters
+# Define parameters. Potentially define parameters so that they fit typical behaviour  (average for participants)
+# TODO: remove unused variables
 alphas = [0.1, 0.5, 0.9]  # np.linspace(0, 1, 11)
 n_trials = 1
 alpha_thresh = 0.0001
 c = -1
-kappa = 0.67  # (0.0 - 0.9)  # recurrent inhibition strength
-lambda_param = 1.17  # (0.0-0.9)  # lateral inhibition strength
-tau = 0.5  # time constant of accumulator
 recall_threshold = 1
 noise_std = 0.0003  # (0.0 - 0.8)
 learning_rate = .1  # .1  # learning rate for SR
@@ -112,13 +111,6 @@ decay_time = 0  # 1000  # number of time steps delay between learning and recall
 
 # Compute 50 matrices (one per word list)
 cos_dist_as_probability = [cosine_distance_matrix(words, beta, model) for words in word_lists]
-
-# load data pertaining to semantic distances
-#group_dist = spio.loadmat('SemGr_L1.mat', squeeze_me=True)['semDistGroups']
-#cos_dist_mat = spio.loadmat('allCosL1.mat', squeeze_me=True)['allCos']
-# get array of all cosine distances between words (i.e. all elements in upper triangle of cos_dist_mat
-#all_cos_distances = np.sort([cos_dist_mat[i, j] for i, j in zip(*np.triu_indices(cos_dist_mat.shape[0], k=0))])
-#cos_dist_as_probability = softmax(cos_dist_mat, beta)  # note, normalized such that each column sums to 1
 
 
 class Agent(object):
@@ -199,7 +191,6 @@ class Agent(object):
 
         # Initialise trace and recall list
         recall_list = [np.nan] * self.n
-        recall_prob_list = [] #[[np.nan] * self.n] * self.n
 
         for i in range(self.n):
             if np.random.rand() < p_stop:
@@ -214,7 +205,7 @@ class Agent(object):
             # recall_prob /= recall_prob.sum()
             else:
                 recall_prob = f_strength / f_strength.sum()
-                recall_prob_list.append(recall_prob)
+
 
             # Randomly select an item to recall
             recalled_word = np.random.choice(np.arange(len(recall_prob)), p=recall_prob)
@@ -224,7 +215,42 @@ class Agent(object):
             already_recalled[recalled_word] = True
             recall_list[i] = recalled_word
 
-        return recall_list, recall_prob_list
+        return recall_list
+
+    def do_free_recall_probability(self, recalled_words, p_stop=.05, aph=1., backward_sampling=False):
+        # Compute Q matrix as a weighted sum of Mcs and S
+        self.Q = aph * self.Mcs + (1 - aph) * self.S
+        already_recalled = np.zeros(self.n, dtype=bool)  # added from v3
+
+        # Initialise trace and recall list
+        recall_prob_list = np.full((1, self.n), np.nan)  # [] #[[np.nan] * self.n] * self.n
+
+        for i in range(self.n):
+            if np.random.rand() < p_stop:
+                break
+            # Compute activation strengths
+            f_strength = np.matmul(self.trace, self.Q)
+            f_strength[already_recalled] = 0.001 #make it very small rather than 0
+
+            if f_strength.sum() == 0:
+                break
+            # recall_prob = np.ones(len(f_strength))
+            # recall_prob /= recall_prob.sum()
+            else:
+                recall_prob = f_strength / f_strength.sum()
+
+
+            # Randomly select an item to recall
+            recalled_word = recalled_words[i]
+            if not np.isnan(recalled_word):
+                recall_prob_list[0, i] = recall_prob[recalled_word]
+                # Update trace and recall list
+                self.trace = self.update_trace(recalled_word, backward_sampling=backward_sampling, recall_phase=True)
+                already_recalled[recalled_word] = True
+            else:
+                break
+
+        return recall_prob_list
 
 
 def generate_data(alpha, ls):
@@ -247,43 +273,67 @@ def generate_data(alpha, ls):
         for t in range(decay_time):
             ag.decay_trace()
 
-        recalled_words, recall_prob_words = ag.do_free_recall_sampling(p_stop=.05, aph=alpha)
+        recalled_words = ag.do_free_recall_sampling(p_stop=.05, aph=alpha)
 
         # Ensure probabilities are a NumPy array
-        recall_prob_words = np.array(recall_prob_words)
+       # recall_prob_words = np.array(recall_prob_words)
 
         # Pad recalled words to maintain consistent length
         while len(recalled_words) < ag.n:
             recalled_words.append(np.nan)
 
-    return recalled_words, recall_prob_words
+    return recalled_words
 
 
-def llik_td_list(recalled_words, recall_prob):
+def llik_td_list(ag, alpha, recalled_words):
     """Computes the negative log-likelihood for a recalled list."""
     logp_recall = np.full(list_length, np.nan)  # Initialize with NaN
-
+    word_list = word_lists[ls]
     words_recalled = np.array(recalled_words)
-    prob_words = np.array(recall_prob)
+
+    word_index = {word: i for i, word in enumerate(word_list)}
+    state_sequence = [word_index[word] for word in word_list]
+
+    for trial in range(n_trials):
+        ag.reset_trace()
+        ag.reset_matrix()
+        ag.reset_x()
+
+        for t in range(len(state_sequence) - 1):
+            ag.update(state_sequence[t], state_sequence[t + 1])
+
+        ag.SR_Ms[:, :, trial] = ag.Mcs
+
+        for t in range(decay_time):
+            ag.decay_trace()
+
+
+        words_prob = ag.do_free_recall_probability(recalled_words, p_stop=.05, aph=alpha)
+        words_prob = np.squeeze(words_prob)
     #prob_words = np.squeeze(recall_prob)
 
-    for w in range(prob_words.shape[0]):
+    for w in range(words_prob.shape[0]):
         try:
-            if not np.isnan(words_recalled[w]):  # ✅ Check for NaN before conversion
-                pw = int(words_recalled[w])
-                logp_recall[w] = np.log(prob_words[w, pw] + 1e-10)  # Avoid log(0)
+            if not np.all(np.isnan(words_prob[w])):  # ✅ Check for NaN before conversion
+                #pw = int(words_recalled[w])
+                logp_recall[w] = np.log(words_prob[w] + 1e-10)  # Avoid log(0)
         except IndexError as e:
-            print(f"IndexError at w={w}, pw={pw}: {e}")
+            print(f"IndexError at w={w} : {e}")
 
     return -np.nansum(logp_recall)
 
 
-def llik_td(alpha, all_recalled_words, all_recalled_probs):
+def llik_td(x, *args):
     """Computes the total negative log-likelihood across all lists."""
+    alpha = x
+    all_recalled_words = args
     logp_ns_lists = np.zeros(n_lists)
+    all_recalled_words = np.array(all_recalled_words, dtype=object)
+    all_recalled_words = np.squeeze(all_recalled_words)
 
     for ls in range(n_lists -1):
-        logp_ns_lists[ls] = llik_td_list(all_recalled_words[ls], all_recalled_probs[ls])
+        ag = Agent(ls, list_length, learning_rate=learning_rate, decay=.95)
+        logp_ns_lists[ls] = llik_td_list(ag, alpha, all_recalled_words[ls])
 
     return np.nansum(logp_ns_lists)
 
@@ -291,32 +341,70 @@ def llik_td(alpha, all_recalled_words, all_recalled_probs):
 if __name__ == '__main__':
     """Main execution loop that avoids duplicate calls to generate_data."""
 
+
+    # generate some data
+
+    all_recalled_trials = []
     for a in range(len(alphas)):
+
         alpha = alphas[a]
+
+
         logp_ns_all = np.zeros(n_lists)
         all_recalled_words = []
-        all_recalled_probs = []
+
+
 
         for ls in range(n_lists - 1):
-            recalled_words, recall_prob = generate_data(alpha, ls)
-            logp_ns_all[ls] = llik_td_list(recalled_words, recall_prob)
+            # initialise agent:
+            ag = Agent(ls, list_length, learning_rate=learning_rate, decay=.95)
+
+            recalled_words = generate_data(alpha, ls)
+            logp_ns_all[ls] = llik_td_list(ag, alpha, recalled_words)
 
             all_recalled_words.append(recalled_words)
-            all_recalled_probs.append(recall_prob)
+            #all_recalled_probs.append(recall_prob)
 
         # Convert lists to NumPy arrays for consistency
         all_recalled_words = np.array(all_recalled_words, dtype=object)
-        all_recalled_probs = np.array(all_recalled_probs, dtype=object)
+        # all_recalled_probs = np.array(all_recalled_probs, dtype=object)
+        all_recalled_trials.append(all_recalled_words)
+
+    inferred_alpha = np.zeros(len(alphas))
+    logp_ns = np.zeros(len(alphas))
+
+    for a in range(len(alphas)):
+
+        alpha = alphas[a]
+        all_recalled_words = all_recalled_trials[a]
 
         # Compute log-likelihood only ONCE using precomputed recall data
-        logp_ns = llik_td(alpha, all_recalled_words, all_recalled_probs)
+        logp_ns[a] = llik_td(alpha, all_recalled_words)
 
-        result = scipy.optimize.minimize(llik_td, alpha, args=(all_recalled_words, all_recalled_probs), method="BFGS")
+        result = scipy.optimize.minimize(llik_td, alpha, args=(all_recalled_words), method="BFGS")
+        inferred_alpha[a] = result.x[0]
 
         print(result)
         print("")
         print(f"MLE: alpha = {result.x[0]:.2f} (true value = {alpha})")
+        print("end")
 
     print('done')
+
+    g = plt.figure(1)
+    x = np.array(alphas)
+    y = np.array(inferred_alpha)
+    plt.xlabel("True alpha")
+    plt.ylabel("Inferred alpha")
+    # plt.xticks(np.arange(0, 1, 0.1))
+    # plt.yticks(np.arange(0, 1, 0.1))
+    plt.plot(x, y, 'o')
+    m, b = np.polyfit(x, y, 1)
+    plt.plot(x, m * x + b)
+    g.show()
+
+    print("wtf")
+
+
 
 
