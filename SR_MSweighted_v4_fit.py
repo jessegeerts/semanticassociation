@@ -395,7 +395,7 @@ if __name__ == '__main__':
     x = np.array(alphas)
     y = np.array(inferred_alpha)
     plt.xlabel("True alpha")
-    plt.ylabel("Inferred alpha")
+    plt.ylabel("Estimated alpha")
     # plt.xticks(np.arange(0, 1, 0.1))
     # plt.yticks(np.arange(0, 1, 0.1))
     plt.plot(x, y, 'o')
