@@ -239,8 +239,11 @@ class Agent(object):
             else:
                 recall_prob = f_strength / f_strength.sum()
 
+            #if np.any(recall_prob<0):
+                #print("check this")
+               # exit
 
-            # Randomly select an item to recall
+
             recalled_word = recalled_words[i]
             if not np.isnan(recalled_word):
                 recall_prob_list[0, i] = recall_prob[recalled_word]
@@ -285,8 +288,11 @@ def generate_data(alpha, ls):
     return recalled_words
 
 
-def llik_td_list(ag, alpha, recalled_words):
+def llik_td_list(x, *args): #(ag, alpha, recalled_words):
     """Computes the negative log-likelihood for a recalled list."""
+
+    alpha = x
+    ag, recalled_words = args
     logp_recall = np.full(list_length, np.nan)  # Initialize with NaN
     word_list = word_lists[ls]
     words_recalled = np.array(recalled_words)
@@ -312,10 +318,16 @@ def llik_td_list(ag, alpha, recalled_words):
         words_prob = np.squeeze(words_prob)
     #prob_words = np.squeeze(recall_prob)
 
+    #if np.any(words_prob<0):
+     #   print(f"check prob p={words_prob}")
+      #  exit()
+
     for w in range(words_prob.shape[0]):
         try:
             if not np.all(np.isnan(words_prob[w])):  # ✅ Check for NaN before conversion
                 #pw = int(words_recalled[w])
+                if words_prob[w]<0:
+                    print(f"Issue with prob p={words_prob[w]} for w ={w}")
                 logp_recall[w] = np.log(words_prob[w] + 1e-10)  # Avoid log(0)
         except IndexError as e:
             print(f"IndexError at w={w} : {e}")
@@ -333,7 +345,7 @@ def llik_td(x, *args):
 
     for ls in range(n_lists -1):
         ag = Agent(ls, list_length, learning_rate=learning_rate, decay=.95)
-        logp_ns_lists[ls] = llik_td_list(ag, alpha, all_recalled_words[ls])
+        logp_ns_lists[ls] = llik_td_list(alpha, ag, all_recalled_words[ls])
 
     return np.nansum(logp_ns_lists)
 
@@ -353,14 +365,13 @@ if __name__ == '__main__':
         logp_ns_all = np.zeros(n_lists)
         all_recalled_words = []
 
-
-
         for ls in range(n_lists - 1):
             # initialise agent:
             ag = Agent(ls, list_length, learning_rate=learning_rate, decay=.95)
 
             recalled_words = generate_data(alpha, ls)
-            logp_ns_all[ls] = llik_td_list(ag, alpha, recalled_words)
+            logp_ns_all[ls] = llik_td_list(alpha, ag, recalled_words)
+
 
             all_recalled_words.append(recalled_words)
             #all_recalled_probs.append(recall_prob)
@@ -381,7 +392,7 @@ if __name__ == '__main__':
         # Compute log-likelihood only ONCE using precomputed recall data
         logp_ns[a] = llik_td(alpha, all_recalled_words)
 
-        result = scipy.optimize.minimize(llik_td, alpha, args=(all_recalled_words), method="BFGS")
+        result = scipy.optimize.minimize(llik_td, alpha, args=(all_recalled_words), bounds=[(0, 1)])
         inferred_alpha[a] = result.x[0]
 
         print(result)
