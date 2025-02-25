@@ -355,22 +355,26 @@ if __name__ == '__main__':
 
 
     # generate some data
-
+    inferredAlpha_lists = []
     all_recalled_trials = []
     for a in range(len(alphas)):
 
         alpha = alphas[a]
-
+        inferred_alphaLists = np.zeros(n_lists)
 
         logp_ns_all = np.zeros(n_lists)
         all_recalled_words = []
 
-        for ls in range(n_lists - 1):
+        for ls in range(n_lists):
             # initialise agent:
             ag = Agent(ls, list_length, learning_rate=learning_rate, decay=.95)
 
             recalled_words = generate_data(alpha, ls)
             logp_ns_all[ls] = llik_td_list(alpha, ag, recalled_words)
+
+
+            result_lists = scipy.optimize.minimize(llik_td_list, alpha, args=(ag, recalled_words), bounds=[(0, 1)])
+            inferred_alphaLists[ls] = result_lists.x[0]
 
 
             all_recalled_words.append(recalled_words)
@@ -380,9 +384,12 @@ if __name__ == '__main__':
         all_recalled_words = np.array(all_recalled_words, dtype=object)
         # all_recalled_probs = np.array(all_recalled_probs, dtype=object)
         all_recalled_trials.append(all_recalled_words)
+        inferredAlpha_lists.append(inferred_alphaLists)
+
 
     inferred_alpha = np.zeros(len(alphas))
     logp_ns = np.zeros(len(alphas))
+    guess_alphas = np.zeros(len(alphas))
 
     for a in range(len(alphas)):
 
@@ -392,8 +399,16 @@ if __name__ == '__main__':
         # Compute log-likelihood only ONCE using precomputed recall data
         logp_ns[a] = llik_td(alpha, all_recalled_words)
 
-        result = scipy.optimize.minimize(llik_td, alpha, args=(all_recalled_words), bounds=[(0, 1)])
+        guess_alpha = abs(np.random.normal(0,1,1))
+        if guess_alpha > 1:
+            guess_alpha = guess_alpha - 1
+        elif guess_alpha < 0:
+            guess_alpha = guess_alpha + 1
+
+
+        result = scipy.optimize.minimize(llik_td, guess_alpha, args=(all_recalled_words), bounds=[(0, 1)])
         inferred_alpha[a] = result.x[0]
+        guess_alphas[a] = guess_alpha
 
         print(result)
         print("")
@@ -407,8 +422,24 @@ if __name__ == '__main__':
     y = np.array(inferred_alpha)
     plt.xlabel("True alpha")
     plt.ylabel("Estimated alpha")
+    #plt.xticks(np.arange(0, 1, 0.1))
+   # plt.yticks(np.arange(0, 1, 0.1))
+    plt.xlim(0, 1)
+    plt.ylim(0,1)
+    plt.plot(x, y, 'o')
+    m, b = np.polyfit(x, y, 1)
+    plt.plot(x, m * x + b)
+    g.show()
+
+    r = plt.figure(2)
+    x = np.array(guess_alphas)
+    y = np.array(inferred_alpha)
+    plt.xlabel("Guess alpha")
+    plt.ylabel("Estimated alpha")
     # plt.xticks(np.arange(0, 1, 0.1))
     # plt.yticks(np.arange(0, 1, 0.1))
+    plt.xlim(0, 1)
+    plt.ylim(0, 1)
     plt.plot(x, y, 'o')
     m, b = np.polyfit(x, y, 1)
     plt.plot(x, m * x + b)
