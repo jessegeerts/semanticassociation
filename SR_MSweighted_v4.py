@@ -16,7 +16,7 @@ def softmax(x, beta):
 
 
 # Define parameters
-alphas = [0.5]  # np.linspace(0, 1, 11)
+alphas = [0]  # np.linspace(0, 1, 11)
 n_trials = 500
 alpha_thresh = 0.0001
 c = -1
@@ -26,18 +26,32 @@ tau = 0.5  # time constant of accumulator
 recall_threshold = 1
 noise_std = 0.0003  # (0.0 - 0.8)
 learning_rate = 0.8 #.1  # .1  # learning rate for SR
-beta = 10 #40
+beta = 40 #40
 decay_time = 0 #1000  # number of time steps delay between learning and recall
 
 # load data pertaining to semantic distances
 group_dist = spio.loadmat('SemGr_L1.mat', squeeze_me=True)['semDistGroups']
 cos_dist_mat = spio.loadmat('allCosL1.mat', squeeze_me=True)['allCos']
+for t in range(np.shape(cos_dist_mat)[0]):
+    cos_dist_mat[t, t] = 1
 cos_dist_appr = np.round(cos_dist_mat, 2)
 
 # get array of all cosine distances between words (i.e. all elements in upper triangle of cos_dist_mat
 all_cos_distances = np.sort([cos_dist_mat[i, j] for i, j in zip(*np.triu_indices(cos_dist_mat.shape[0], k=0))])
+
 cos_dist_as_probability = softmax(cos_dist_mat, beta)  # note, normalized such that each column sums to 1
 
+#cos_dist_as_probability = np.zeros(np.shape(cos_dist_mat))
+
+#for t in range(np.shape(cos_dist_mat)[0]):
+ #   totCos = np.sum(np.square(cos_dist_mat[t, :]))
+  #  for wr in range(np.shape(cos_dist_mat)[1]):
+   #     cos_dist_as_probability[t, wr] = np.square(cos_dist_mat[t, wr])/totCos
+
+
+
+
+#TODO: setting the discount lower, the temporal context will have a higher effect. Make different lagCRP plots with different values of gamma
 
 class Agent(object):
     """Simple SR learning agent with eligibility traces.
@@ -180,8 +194,11 @@ if __name__ == '__main__':
             ag.reset_x()
             # learning over M does not accumulate across different trials (each trial is tested with free recall
             # individually)
-            for t in range(len(state_sequence) - 1):
-                ag.update(state_sequence[t], state_sequence[t + 1])
+            for t in range(len(state_sequence)):
+                if t < len(state_sequence)-1:
+                    ag.update(state_sequence[t], state_sequence[t + 1])
+                elif t == len(state_sequence)-1:
+                    ag.trace = ag.update_trace(state_sequence[t])
                 # ag.decay_trace()
 
             ag.SR_Ms[:, :, trial] = ag.Mcs
@@ -371,10 +388,10 @@ if __name__ == '__main__':
         # plt.close()
 
         t = plt.figure(4)
-        x = values
-        y = lagCos_final
+        x = values[0:(len(values)-1)]
+        y = lagCos_final[0:(len(values)-1)]
         # plt.ylim([0, 1.5])
-        plt.xlabel("cosDistance")
+        plt.xlabel("Cosine Similarity")
         plt.ylabel("Cond. Resp. Probability")
         m, b = np.polyfit(x, y, 1)
         plt.title("Alpha =" + str(alpha) + "   reg = " + str(m))
